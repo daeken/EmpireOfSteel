@@ -22,22 +22,22 @@ struct KvmUserspaceMemoryRegion {
 }
 
 public unsafe class KvmVm : IDisposable {
-	readonly WrappedFD KvmFd = new(open("/dev/kvm", 2));
 	readonly WrappedFD VmFd;
 	readonly Dictionary<ulong, uint> MemorySlots = new();
 	readonly Stack<uint> FreeSlots = new();
+	readonly List<KvmVcpu> Vcpus = new();
 
 	public KvmVm() {
-		var version = TrapErrno(() => ioctl_KVM_GET_API_VERSION(KvmFd, KvmIoctl.KVM_GET_API_VERSION));
+		var version = Ioctl.KVM_GET_API_VERSION();
 		if(version != 12)
 			throw new Exception($"Unsupported KVM API version {version}!");
-		VmFd = new(TrapErrno(() => ioctl_KVM_CREATE_VM(KvmFd, KvmIoctl.KVM_CREATE_VM, 0)));
+		VmFd = new(Ioctl.KVM_CREATE_VM());
 	}
 
 	~KvmVm() => Dispose();
 
 	public void Dispose() {
-		KvmFd?.Dispose();
+		Vcpus.ForEach(x => x.Dispose());
 		VmFd?.Dispose();
 	}
 
@@ -57,8 +57,7 @@ public unsafe class KvmVm : IDisposable {
 			MemorySize = size, 
 			UserspaceAddr = hostAddress
 		};
-		if(TrapErrno(() => ioctl_KVM_SET_USER_MEMORY_REGION(VmFd, KvmIoctl.KVM_SET_USER_MEMORY_REGION, ref region)) != 0)
-			throw new Exception($"Could not map memory at guest 0x{guestPhysAddr:X}");
+		Ioctl.KVM_SET_USER_MEMORY_REGION(VmFd, region);
 	}
 
 	public void Unmap(ulong guestPhysAddr) {
@@ -70,34 +69,14 @@ public unsafe class KvmVm : IDisposable {
 			MemorySize = 0, 
 			UserspaceAddr = IntPtr.Zero
 		};
-		if(TrapErrno(() => ioctl_KVM_SET_USER_MEMORY_REGION(VmFd, KvmIoctl.KVM_SET_USER_MEMORY_REGION, ref region)) != 0)
-			throw new Exception($"Could not unmap memory at guest 0x{guestPhysAddr:X}");
+		Ioctl.KVM_SET_USER_MEMORY_REGION(VmFd, region);
 	}
 
 	public KvmVcpu CreateVcpu() {
-		throw new NotImplementedException();
-	}
-	
-	[DllImport("libc", CharSet = CharSet.Ansi)]
-	static extern int open(string filename, int flags);
-
-	[DllImport("libc", CallingConvention = CallingConvention.Cdecl, EntryPoint = "ioctl", SetLastError = true)]
-	static extern int ioctl_KVM_GET_API_VERSION(int fd, ulong req, ulong _ = 0);
-
-	[DllImport("libc", CallingConvention = CallingConvention.Cdecl, EntryPoint = "ioctl", SetLastError = true)]
-	static extern int ioctl_KVM_CREATE_VM(int fd, ulong req, ulong machineType);
-
-	[DllImport("libc", CallingConvention = CallingConvention.Cdecl, EntryPoint = "ioctl", SetLastError = true)]
-	static extern int ioctl_KVM_SET_USER_MEMORY_REGION(int fd, ulong req, ref KvmUserspaceMemoryRegion region);
-
-	[DllImport("libc")]
-	static extern IntPtr strerror(int errno);
-
-	static int TrapErrno(Func<int> func) {
-		var ret = func();
-		var errno = Marshal.GetLastPInvokeError();
-		if(errno != 0)
-			throw new Exception($"Got errno {errno}: {Marshal.PtrToStringAnsi(strerror(errno))}");
-		return ret;
+		var fd = Ioctl.KVM_CREATE_VCPU(VmFd, (ulong) Vcpus.Count);
+		if(fd == -1) return null;
+		var vcpu = new KvmVcpu(fd);
+		Vcpus.Add(vcpu);
+		return vcpu;
 	}
 }
