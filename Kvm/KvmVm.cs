@@ -21,6 +21,17 @@ struct KvmUserspaceMemoryRegion {
 	public IntPtr UserspaceAddr;
 }
 
+[StructLayout(LayoutKind.Explicit)]
+struct KvmXenHvmConfig {
+	[FieldOffset(0)] public uint Flags;
+	[FieldOffset(4)] public uint Msr;
+	[FieldOffset(8)] public ulong BlobAddr32;
+	[FieldOffset(16)] public ulong BlobAddr64;
+	[FieldOffset(24)] public byte BlobSize32;
+	[FieldOffset(25)] public byte BlobSize64;
+	[FieldOffset(55)] byte Pad;
+}
+
 public unsafe class KvmVm : IDisposable {
 	readonly WrappedFD VmFd;
 	readonly Dictionary<ulong, uint> MemorySlots = new();
@@ -32,6 +43,11 @@ public unsafe class KvmVm : IDisposable {
 		if(version != 12)
 			throw new Exception($"Unsupported KVM API version {version}!");
 		VmFd = new(Ioctl.KVM_CREATE_VM());
+		
+		Ioctl.KVM_XEN_HVM_CONFIG(VmFd, new() {
+			Flags = 1 << 1, // KVM_XEN_HVM_CONFIG_INTERCEPT_HCALL
+			Msr = 0xDEADBEEF, 
+		});
 	}
 
 	~KvmVm() => Dispose();

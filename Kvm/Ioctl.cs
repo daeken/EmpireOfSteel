@@ -13,10 +13,11 @@ public static unsafe class Ioctl {
 	static readonly ulong _KVM_RUN                    = _IO(KVMIO, 0x80);
 	static readonly ulong _KVM_GET_REGS               = _IOR<KvmRegs>(KVMIO, 0x81);
 	static readonly ulong _KVM_SET_REGS               = _IOW<KvmRegs>(KVMIO, 0x82);
-	static readonly ulong _KVM_GET_SREGS               = _IOR<KvmSregs>(KVMIO, 0x83);
-	static readonly ulong _KVM_SET_SREGS               = _IOW<KvmSregs>(KVMIO, 0x84);
+	static readonly ulong _KVM_GET_SREGS              = _IOR<KvmSregs>(KVMIO, 0x83);
+	static readonly ulong _KVM_SET_SREGS              = _IOW<KvmSregs>(KVMIO, 0x84);
 	static readonly ulong _KVM_TRANSLATE              = _IOWR<KvmTranslate>(KVMIO, 0x85);
 	static readonly ulong _KVM_SET_GUEST_DEBUG        = _IOW<KvmDebug>(KVMIO, 0x9b);
+	static readonly ulong _KVM_XEN_HVM_CONFIG         = _IOW<KvmXenHvmConfig>(KVMIO, 0x7a);
 
 	const ulong KVMIO = 0xAE;
 	
@@ -97,6 +98,10 @@ public static unsafe class Ioctl {
 	[DllImport("libc", CallingConvention = CallingConvention.Cdecl, EntryPoint = "ioctl", SetLastError = true)]
 	static extern int ioctl_KVM_SET_GUEST_DEBUG(int fd, ulong req, in KvmDebug debug);
 	internal static void KVM_SET_GUEST_DEBUG(int fd, in KvmDebug debug) => Trap(ioctl_KVM_SET_GUEST_DEBUG(fd, _KVM_SET_GUEST_DEBUG, debug));
+	
+	[DllImport("libc", CallingConvention = CallingConvention.Cdecl, EntryPoint = "ioctl", SetLastError = true)]
+	static extern int ioctl_KVM_XEN_HVM_CONFIG(int fd, ulong req, in KvmXenHvmConfig debug);
+	internal static void KVM_XEN_HVM_CONFIG(int fd, in KvmXenHvmConfig config) => Trap(ioctl_KVM_XEN_HVM_CONFIG(fd, _KVM_XEN_HVM_CONFIG, config));
 	
 	[DllImport("libc")]
 	static extern IntPtr strerror(int errno);

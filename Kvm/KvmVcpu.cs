@@ -20,7 +20,21 @@ enum KvmExitReason : uint {
 	Nmi, 
 	InternalError, 
 	Osi, 
-	PaprHCall
+	PaprHCall, 
+	Xen = 34
+}
+
+[StructLayout(LayoutKind.Sequential, Pack = 8)]
+unsafe struct KvmXenExit {
+	internal uint Type;
+	uint _;
+	
+	// Only hypercalls exist right now, so no need for union
+	internal uint LongMode;
+	internal uint Cpl;
+	internal ulong Input;
+	internal ulong Result;
+	internal fixed ulong Params[6];
 }
 
 [StructLayout(LayoutKind.Explicit)]
@@ -31,6 +45,8 @@ struct KvmCpuRun {
 	[FieldOffset(13)] internal byte IfFlag;
 	[FieldOffset(16)] internal ulong Cr8;
 	[FieldOffset(24)] internal ulong ApicBase;
+
+	[FieldOffset(32)] internal KvmXenExit XenExit;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -91,6 +107,8 @@ unsafe struct KvmDebug {
 }
 
 public unsafe class KvmVcpu {
+	public Func<KvmVcpu, ulong, ulong[], ulong> Hypercall;
+	
 	readonly WrappedFD Fd;
 	volatile KvmCpuRun* CpuRun;
 	KvmRegs Regs;
@@ -149,6 +167,12 @@ public unsafe class KvmVcpu {
 		return (trans.Valid != 0, trans.UserMode != 0, trans.PhysicalAddress);
 	}
 
+	public ulong SafeTranslate(ulong virtaddr) {
+		var (valid, _, phys) = Translate(virtaddr);
+		if(!valid) throw new Exception();
+		return phys;
+	}
+
 	public KvmSregs Sregs {
 		get => Ioctl.KVM_GET_SREGS(Fd);
 		set => Ioctl.KVM_SET_SREGS(Fd, value);
@@ -166,6 +190,11 @@ public unsafe class KvmVcpu {
 			Ioctl.KVM_GET_REGS(Fd, out Regs);
 			Console.WriteLine($"Exited at 0x{Rip:X}");
 			switch(CpuRun->ExitReason) {
+				case KvmExitReason.Xen:
+					ref var xe = ref CpuRun->XenExit;
+					Console.WriteLine($"Xen hypercall! {xe.Type} {xe.LongMode} {xe.Input:X}");
+					xe.Result = Hypercall?.Invoke(this, xe.Input, Enumerable.Range(0, 6).Select(i => CpuRun->XenExit.Params[i]).ToArray()) ?? 1;
+					break;
 				default:
 					throw new Exception($"Unknown exit reason: {CpuRun->ExitReason}");
 			}
