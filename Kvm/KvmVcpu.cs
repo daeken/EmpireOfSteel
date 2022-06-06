@@ -37,6 +37,14 @@ unsafe struct KvmXenExit {
 	internal fixed ulong Params[6];
 }
 
+[StructLayout(LayoutKind.Sequential, Pack = 0)]
+struct KvmIoExit {
+	internal byte Direction, Size;
+	internal ushort Port;
+	internal uint Count;
+	internal ulong DataOffset;
+}
+
 [StructLayout(LayoutKind.Explicit)]
 struct KvmCpuRun {
 	[FieldOffset(0)] internal byte RequestInterruptWindow;
@@ -47,6 +55,7 @@ struct KvmCpuRun {
 	[FieldOffset(24)] internal ulong ApicBase;
 
 	[FieldOffset(32)] internal KvmXenExit XenExit;
+	[FieldOffset(32)] internal KvmIoExit IoExit;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -106,8 +115,23 @@ unsafe struct KvmDebug {
 	public fixed ulong DebugReg[8];
 }
 
+[StructLayout(LayoutKind.Sequential, Size = 72)]
+struct KvmXenVcpuAttr {
+	public KvmXenVcpuAttrType Type;
+	public ulong Value;
+}
+
+enum KvmXenVcpuAttrType : ulong {
+	VcpuInfo,
+	VcpuTimeInfo,
+	RunstateAddr,
+	RunstateCurrent,
+	RunstateData,
+	RunstateAdjust
+}
+
 public unsafe class KvmVcpu {
-	public Func<KvmVcpu, ulong, ulong[], ulong> Hypercall;
+	public readonly KvmVm Vm;
 	
 	readonly WrappedFD Fd;
 	volatile KvmCpuRun* CpuRun;
@@ -146,14 +170,20 @@ public unsafe class KvmVcpu {
 			Ioctl.KVM_SET_GUEST_DEBUG(Fd, dbg);
 		}
 	}
+
+	public ulong XenInfo {
+		set => Ioctl.KVM_XEN_VCPU_SET_ATTR(Fd, new() { Type = KvmXenVcpuAttrType.VcpuInfo, Value = value });
+	}
 	
-	internal KvmVcpu(int fd) {
+	internal KvmVcpu(KvmVm vm, int fd) {
+		Vm = vm;
 		Fd = new(fd);
 		var mmapSize = Ioctl.KVM_GET_VCPU_MMAP_SIZE();
 		var ptr = Mmap(null, (ulong) mmapSize, 4 | 2, 1, fd, 0);
 		if(ptr == null) throw new Exception("Failed to mmap kvm_run!");
 		CpuRun = (KvmCpuRun*) ptr;
 		Ioctl.KVM_GET_REGS(fd, out Regs);
+		Ioctl.SetCpuid(fd);
 	}
 
 	internal void Dispose() {
@@ -185,17 +215,28 @@ public unsafe class KvmVcpu {
 				DirtyRegs = false;
 			}
 
-			Console.WriteLine($"Exit reason before entry: {CpuRun->ExitReason}");
-			Ioctl.KVM_RUN(Fd);
+			try {
+				Ioctl.KVM_RUN(Fd);
+			} catch(Exception) {
+				try {
+					Ioctl.KVM_GET_REGS(Fd, out Regs);
+				} catch(Exception) {}
+				throw;
+			}
 			Ioctl.KVM_GET_REGS(Fd, out Regs);
-			Console.WriteLine($"Exited at 0x{Rip:X}");
 			switch(CpuRun->ExitReason) {
 				case KvmExitReason.Xen:
 					ref var xe = ref CpuRun->XenExit;
-					Console.WriteLine($"Xen hypercall! {xe.Type} {xe.LongMode} {xe.Input:X}");
-					xe.Result = Hypercall?.Invoke(this, xe.Input, Enumerable.Range(0, 6).Select(i => CpuRun->XenExit.Params[i]).ToArray()) ?? 1;
+					xe.Result = Vm.System.Hypercall(this, xe.Input, Enumerable.Range(0, 6).Select(i => CpuRun->XenExit.Params[i]).ToArray());
 					break;
+				case KvmExitReason.Io: {
+					ref var ie = ref CpuRun->IoExit;
+					Vm.System.PortIo(this, ie.Port, ie.Direction != 0, new Span<byte>((byte*) CpuRun + (int) ie.DataOffset, ie.Size));
+					break;
+				}
 				default:
+					var (valid, _, paddr) = Translate(Rip);
+					Console.WriteLine($"Exited at 0x{Rip:X} (physaddr 0x{paddr:X} - valid {valid})");
 					throw new Exception($"Unknown exit reason: {CpuRun->ExitReason}");
 			}
 		}

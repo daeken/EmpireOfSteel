@@ -32,7 +32,22 @@ struct KvmXenHvmConfig {
 	[FieldOffset(55)] byte Pad;
 }
 
+enum KvmXenHvmAttrType : ushort {
+	LongMode,
+	SharedInfo,
+	UpcallVector,
+}
+
+[StructLayout(LayoutKind.Explicit, Size = 72)]
+struct KvmXenHvmAttr {
+	[FieldOffset(0)] public KvmXenHvmAttrType Type;
+	[FieldOffset(8)] public byte LongMode;
+	[FieldOffset(8)] public byte Vector;
+	[FieldOffset(8)] public ulong SharedInfoGfn;
+}
+
 public unsafe class KvmVm : IDisposable {
+	public ISystem System;
 	readonly WrappedFD VmFd;
 	readonly Dictionary<ulong, uint> MemorySlots = new();
 	readonly Stack<uint> FreeSlots = new();
@@ -48,6 +63,14 @@ public unsafe class KvmVm : IDisposable {
 			Flags = 1 << 1, // KVM_XEN_HVM_CONFIG_INTERCEPT_HCALL
 			Msr = 0xDEADBEEF, 
 		});
+	}
+
+	public bool XenLongMode {
+		set => Ioctl.KVM_XEN_HVM_SET_ATTR(VmFd, new() { Type = KvmXenHvmAttrType.LongMode, LongMode = (byte) (value ? 1 : 0) });
+	}
+
+	public ulong XenSharedInfo {
+		set => Ioctl.KVM_XEN_HVM_SET_ATTR(VmFd, new() { Type = KvmXenHvmAttrType.SharedInfo, SharedInfoGfn = value });
 	}
 
 	~KvmVm() => Dispose();
@@ -91,7 +114,7 @@ public unsafe class KvmVm : IDisposable {
 	public KvmVcpu CreateVcpu() {
 		var fd = Ioctl.KVM_CREATE_VCPU(VmFd, (ulong) Vcpus.Count);
 		if(fd == -1) return null;
-		var vcpu = new KvmVcpu(fd);
+		var vcpu = new KvmVcpu(this, fd);
 		Vcpus.Add(vcpu);
 		return vcpu;
 	}

@@ -18,6 +18,10 @@ public static unsafe class Ioctl {
 	static readonly ulong _KVM_TRANSLATE              = _IOWR<KvmTranslate>(KVMIO, 0x85);
 	static readonly ulong _KVM_SET_GUEST_DEBUG        = _IOW<KvmDebug>(KVMIO, 0x9b);
 	static readonly ulong _KVM_XEN_HVM_CONFIG         = _IOW<KvmXenHvmConfig>(KVMIO, 0x7a);
+	static readonly ulong _KVM_GET_SUPPORTED_CPUID    = _IOWR(KVMIO, 5, 8);
+	static readonly ulong _KVM_SET_CPUID2             = _IOW(KVMIO, 0x90, 8);
+	static readonly ulong _KVM_XEN_HVM_SET_ATTR       = _IOW<KvmXenHvmAttr>(KVMIO, 0xc9);
+	static readonly ulong _KVM_XEN_VCPU_SET_ATTR      = _IOW<KvmXenVcpuAttr>(KVMIO, 0xcb);
 
 	const ulong KVMIO = 0xAE;
 	
@@ -40,9 +44,12 @@ public static unsafe class Ioctl {
 		(size << _IOC_SIZESHIFT);
 	
 	static ulong _IO(ulong type, ulong nr) => _IOC(_IOC_NONE, type, nr, 0);
-	static ulong _IOW<T>(ulong type, ulong nr) => _IOC(_IOC_WRITE, type, nr, (ulong) Marshal.SizeOf<T>());
-	static ulong _IOR<T>(ulong type, ulong nr) => _IOC(_IOC_READ, type, nr, (ulong) Marshal.SizeOf<T>());
-	static ulong _IOWR<T>(ulong type, ulong nr) => _IOC(_IOC_READ | _IOC_WRITE, type, nr, (ulong) Marshal.SizeOf<T>());
+	static ulong _IOW<T>(ulong type, ulong nr) => _IOW(type, nr, (ulong) Marshal.SizeOf<T>());
+	static ulong _IOW(ulong type, ulong nr, ulong size) => _IOC(_IOC_WRITE, type, nr, size);
+	static ulong _IOR<T>(ulong type, ulong nr) => _IOR(type, nr, (ulong) Marshal.SizeOf<T>());
+	static ulong _IOR(ulong type, ulong nr, ulong size) => _IOC(_IOC_READ, type, nr, size);
+	static ulong _IOWR<T>(ulong type, ulong nr) => _IOWR(type, nr, (ulong) Marshal.SizeOf<T>());
+	static ulong _IOWR(ulong type, ulong nr, ulong size) => _IOC(_IOC_READ | _IOC_WRITE, type, nr, size);
 	
 	[DllImport("libc", CharSet = CharSet.Ansi)]
 	static extern int open(string filename, int flags);
@@ -102,6 +109,28 @@ public static unsafe class Ioctl {
 	[DllImport("libc", CallingConvention = CallingConvention.Cdecl, EntryPoint = "ioctl", SetLastError = true)]
 	static extern int ioctl_KVM_XEN_HVM_CONFIG(int fd, ulong req, in KvmXenHvmConfig debug);
 	internal static void KVM_XEN_HVM_CONFIG(int fd, in KvmXenHvmConfig config) => Trap(ioctl_KVM_XEN_HVM_CONFIG(fd, _KVM_XEN_HVM_CONFIG, config));
+	
+	[DllImport("libc", CallingConvention = CallingConvention.Cdecl, EntryPoint = "ioctl", SetLastError = true)]
+	static extern int ioctl_KVM_GET_SUPPORTED_CPUID(int fd, ulong req, void* str);
+	[DllImport("libc", CallingConvention = CallingConvention.Cdecl, EntryPoint = "ioctl", SetLastError = true)]
+	static extern int ioctl_KVM_SET_CPUID2(int fd, ulong req, void* str);
+
+	[DllImport("libc", CallingConvention = CallingConvention.Cdecl, EntryPoint = "ioctl", SetLastError = true)]
+	static extern int ioctl_KVM_XEN_HVM_SET_ATTR(int fd, ulong req, in KvmXenHvmAttr attr);
+	internal static void KVM_XEN_HVM_SET_ATTR(int fd, in KvmXenHvmAttr attr) => Trap(ioctl_KVM_XEN_HVM_SET_ATTR(fd, _KVM_XEN_HVM_SET_ATTR, attr));
+
+	[DllImport("libc", CallingConvention = CallingConvention.Cdecl, EntryPoint = "ioctl", SetLastError = true)]
+	static extern int ioctl_KVM_XEN_VCPU_SET_ATTR(int fd, ulong req, in KvmXenVcpuAttr attr);
+	internal static void KVM_XEN_VCPU_SET_ATTR(int fd, in KvmXenVcpuAttr attr) => Trap(ioctl_KVM_XEN_VCPU_SET_ATTR(fd, _KVM_XEN_VCPU_SET_ATTR, attr));
+	
+	internal static void SetCpuid(int fd) {
+		fixed(uint* buf = new uint[2 + 10 * 100]) {
+			buf[0] = 100;
+			Trap(ioctl_KVM_GET_SUPPORTED_CPUID(KvmFd, _KVM_GET_SUPPORTED_CPUID, buf));
+			Trap(ioctl_KVM_GET_SUPPORTED_CPUID(KvmFd, _KVM_GET_SUPPORTED_CPUID, buf));
+			Trap(ioctl_KVM_SET_CPUID2(fd, _KVM_SET_CPUID2, buf));
+		}
+	}
 	
 	[DllImport("libc")]
 	static extern IntPtr strerror(int errno);

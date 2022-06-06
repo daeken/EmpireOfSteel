@@ -21,6 +21,8 @@ public unsafe class BoundMemory : IDisposable {
 		Pointer = (IntPtr) tptr;
 		Memory = (void*) Pointer;
 		OnDispose = onDispose;
+		/*for(var i = 0UL; i < size; i += uint.MaxValue)
+			Unsafe.InitBlock((void*) ((ulong) Memory + i), 0, (uint) Math.Min(size - i, uint.MaxValue));*/
 	}
 
 	~BoundMemory() => Dispose(false);
