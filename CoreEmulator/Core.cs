@@ -1,19 +1,33 @@
-﻿using System.Text;
+﻿using System.Net.Sockets;
+using System.Runtime.InteropServices;
+using System.Text;
 using Kvm;
 
 namespace CoreEmulator;
 
-public class Core : ISystem {
+public unsafe class Core : ISystem {
 	public static readonly KvmVm Vm = new();
 	public static readonly BoundMemory PhysMem;
 	public static readonly ulong RamSize = 8UL * 1024 * 1024 * 1024;
 	public static readonly KvmVcpu Vcpu;
+	public static readonly Socket ConsoleSocket;
+	public static readonly Dictionary<uint, IEventChannel> EventChannels = new();
+
+	public XenStore XenStore;
 
 	string XenConsoleBuf = "";
 
 	static Core() {
 		PhysMem = Vm.Map(0, RamSize);
 		Vcpu = Vm.CreateVcpu();
+		try {
+			ConsoleSocket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.IP);
+			ConsoleSocket.Connect(new UnixDomainSocketEndPoint("./console.sock"));
+			ConsoleSocket.ReceiveTimeout = 10;
+		} catch(Exception) {
+			ConsoleSocket = null;
+		}
+		Timer.Run();
 	}
 	
 	public void Run() {
@@ -76,17 +90,17 @@ public class Core : ISystem {
 		Vcpu.Sregs = sregs;
 
 		var kernSpace = PhysMem.AsSpan<byte>(0x200000); // Add another 2MB because ... reasons?
-		var kernData = File.ReadAllBytes("kernel")[..0x017bf3b8]; // TODO: HACK
+		var kernData = File.ReadAllBytes("kernel")[..0x006ef2e8]; // TODO: HACK
 		kernData.CopyTo(kernSpace);
 
-		Vcpu.Rip = 0xffffffff8108f000; // TODO: Actually read xen_start (XEN_ELFNOTE_ENTRY)
+		Vcpu.Rip = 0xffffffff806e6000UL; // TODO: Actually read xen_start (XEN_ELFNOTE_ENTRY)
 
 		var (valid, _, addr) = Vcpu.Translate(Vcpu.Rip);
 		Console.WriteLine($"0x{Vcpu.Rip:X} at physical 0x{addr:X} (valid {valid})");
 
 		Console.WriteLine($"Starting at 0x{Vcpu.Rip:X}");
 
-		var hypercallPage = 0xffffffff8108e000UL; // TODO: Actually read XEN_ELFNOTE_HYPERCALL_PAGE
+		var hypercallPage = 0xffffffff806e5000UL; // TODO: Actually read XEN_ELFNOTE_HYPERCALL_PAGE
 		var hp = PhysMem.AsSpan<byte>(Vcpu.SafeTranslate(hypercallPage));
 		for(var i = 0; i < 128; ++i) {
 			var r = i * 32;
@@ -117,8 +131,12 @@ public class Core : ISystem {
 		}
 		startInfo.NumPages = 8UL * 1024 * 1024 * 1024 / 0x1000;
 		Vm.XenLongMode = true;
-		startInfo.SharedInfo = 0x8000L;
+		startInfo.SharedInfo = 0x8000UL;
 		Vm.XenSharedInfo = startInfo.SharedInfo >> 12; // PFN rather than GPA... Fucking stupid.
+		var storeAddr = 0x9000UL;
+		XenStore = new(PhysMem.AsPointer<XenStoreDomainInterface>(Vcpu.SafeTranslate(storeAddr)));
+		startInfo.StoreMfn = storeAddr >> 12;
+		startInfo.StoreEvtChn = Register(XenStore);
 
 		Vcpu.XenInfo = startInfo.SharedInfo; // It's really sharedinfo + vcpu_id * 64
 
@@ -126,10 +144,10 @@ public class Core : ISystem {
 		Vcpu.Rsp = 0xffffffff80000000 + 0x2000000UL;
 
 		// HACK: Why does this call exist?!
-		var temp = PhysMem.AsSpan<byte>(Vcpu.SafeTranslate(0xffffffff8117ae44));
+		var temp = PhysMem.AsSpan<byte>(Vcpu.SafeTranslate(0xffffffff8072b5d4));
 		for(var i = 0; i < 5; ++i)
 			temp[i] = 0x90;
-		//PhysMem.AsSpan<byte>(Vcpu.SafeTranslate(0xffffffff80a8b3f0))[0] = 0xF4;
+		//PhysMem.AsSpan<byte>(Vcpu.SafeTranslate(0xffffffff81080010))[0] = 0xF4;
 		//PhysMem.AsSpan<byte>(Vcpu.SafeTranslate(0xffffffff80c1b950))[0] = 0xF4; // panic hook
 
 		Console.CancelKeyPress += (sender, eventArgs) => eventArgs.Cancel = true;
@@ -164,13 +182,25 @@ public class Core : ISystem {
 				if(args[0] == 0) { // Write!
 					var (size, addr) = (args[1], args[2]);
 					var buf = PhysMem.AsSpan<byte>(cpu.SafeTranslate(addr))[..(int) size];
-					var str = Encoding.ASCII.GetString(buf);
-					foreach(var c in str) {
-						if(c == '\n') {
-							Console.WriteLine($"Xen console: {XenConsoleBuf}");
-							XenConsoleBuf = "";
-						} else
-							XenConsoleBuf += c;
+					if(ConsoleSocket != null)
+						ConsoleSocket.Send(buf);
+					else {
+						var str = Encoding.ASCII.GetString(buf);
+						foreach(var c in str) {
+							if(c == '\n') {
+								Console.WriteLine($"Xen console: {XenConsoleBuf}");
+								XenConsoleBuf = "";
+							} else
+								XenConsoleBuf += c;
+						}
+					}
+				} else {
+					if(ConsoleSocket == null) break;
+					var (size, addr) = (args[1], args[2]);
+					var buf = PhysMem.AsSpan<byte>(cpu.SafeTranslate(addr))[..(int) size];
+					try {
+						return (ulong) ConsoleSocket.Receive(buf);
+					} catch(Exception) {
 					}
 				}
 				break;
@@ -189,20 +219,72 @@ public class Core : ISystem {
 				break;
 			}
 			case XenHypercall.VcpuOp: {
-				if(args[0] == 3) { // VCPUOP_is_up
-					var cpunum = args[1];
-					if(cpunum == 1)
-						return 1;
-					return ~0UL;
+				var cpunum = args[1];
+				Console.WriteLine($"Vcpu op for cpunum 0x{cpunum:X} (GS 0x{cpu.Sregs.Gs.Base:X} -- vcpu_id? 0x{PhysMem.AsSpan<uint>(cpu.SafeTranslate(cpu.Sregs.Gs.Base + 0x30c))[0]:X})");
+				switch((XenVcpuOp) args[0]) {
+					case XenVcpuOp.IsUp:
+						return cpunum == 0 ? 1 : ~0UL;
+					case XenVcpuOp.StopPeriodicTimer:
+						break;
+					case XenVcpuOp.RegisterVcpuInfo: {
+						ref var str = ref PhysMem.AsSpan<VcpuRegisterVcpuInfo>(cpu.SafeTranslate(args[2]))[0];
+						cpu.XenInfo = (str.Mfn << 12) + str.Offset;
+						break;
+					}
+					case XenVcpuOp.SetSingleshotTimer:
+						Console.WriteLine($"Ignoring SetSingleshotTimer for vcpu {cpunum}");
+						break;
+					case {} x:
+						throw new Exception($"Unhandled VCPU op from xen interface: {x}");
 				}
-				throw new Exception($"Unhandled VCPU op from xen interface: {args[0]}");
+				break;
+			}
+			case XenHypercall.PhysdevOp: {
+				switch(args[0]) {
+					case 28: // PHYSDEVOP_pirq_eoi_gmfn_v2
+						break;
+					default:
+						throw new Exception($"Unhandled Physdev op from xen interface: {args[0]}");
+				}
+				break;
+			}
+			case XenHypercall.GrantTableOp: {
+				Console.WriteLine($"Grant table op {args[0]}");
+				break;
+			}
+			case XenHypercall.EventChannelOp: {
+				switch(args[0]) {
+					case 6: { // EVTCHNOP_alloc_unbound
+						ref var str = ref PhysMem.AsRef<XenEventChnAllocUnbound>(cpu.SafeTranslate(args[1]));
+						Console.WriteLine($"Allocating unbound event channel from {str.Dom} for {str.RemoteDom}");
+						str.OutPort = Register(new PlainEventChannel());
+						break;
+					}
+					default:
+						Console.WriteLine($"Unhandled event channel op: {args[0]}");
+						break;
+				}
+				break;
 			}
 			case {} unk:
 				throw new Exception($"Unhandled Xen hypercall: {unk}");
 		}
 		return 0;
 	}
+
+	[StructLayout(LayoutKind.Sequential)]
+	struct VcpuRegisterVcpuInfo {
+		public ulong Mfn;
+		public uint Offset;
+		uint Reserved;
+	}
 	
 	public void PortIo(KvmVcpu cpu, int port, bool write, Span<byte> data) {
+	}
+
+	public uint Register(IEventChannel channel) {
+		channel.Port = (uint) EventChannels.Count + 1;
+		EventChannels[channel.Port] = channel;
+		return channel.Port;
 	}
 }

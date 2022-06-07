@@ -29,6 +29,9 @@ public unsafe class BoundMemory : IDisposable {
 
 	public Span<T> AsSpan<T>(ulong offset = 0) where T : struct => new((void*) ((ulong) Memory + offset), (int) Math.Min(Size - offset, int.MaxValue));
 
+	public T* AsPointer<T>(ulong offset = 0) where T : unmanaged => (T*) ((ulong) Memory + offset);
+	public ref T AsRef<T>(ulong offset = 0) where T : unmanaged => ref *(T*) ((ulong) Memory + offset);
+
 	void Dispose(bool disposing) {
 		OnDispose();
 		if(disposing) Marshal.FreeHGlobal(OrigPointer);

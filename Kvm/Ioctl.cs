@@ -22,6 +22,7 @@ public static unsafe class Ioctl {
 	static readonly ulong _KVM_SET_CPUID2             = _IOW(KVMIO, 0x90, 8);
 	static readonly ulong _KVM_XEN_HVM_SET_ATTR       = _IOW<KvmXenHvmAttr>(KVMIO, 0xc9);
 	static readonly ulong _KVM_XEN_VCPU_SET_ATTR      = _IOW<KvmXenVcpuAttr>(KVMIO, 0xcb);
+	static readonly ulong _KVM_XEN_HVM_EVTCHN_SEND    = _IOW<KvmIrqRoutingXenEvtChn>(KVMIO, 0xd0);
 
 	const ulong KVMIO = 0xAE;
 	
@@ -122,6 +123,10 @@ public static unsafe class Ioctl {
 	[DllImport("libc", CallingConvention = CallingConvention.Cdecl, EntryPoint = "ioctl", SetLastError = true)]
 	static extern int ioctl_KVM_XEN_VCPU_SET_ATTR(int fd, ulong req, in KvmXenVcpuAttr attr);
 	internal static void KVM_XEN_VCPU_SET_ATTR(int fd, in KvmXenVcpuAttr attr) => Trap(ioctl_KVM_XEN_VCPU_SET_ATTR(fd, _KVM_XEN_VCPU_SET_ATTR, attr));
+	
+	[DllImport("libc", CallingConvention = CallingConvention.Cdecl, EntryPoint = "ioctl", SetLastError = true)]
+	static extern int ioctl_KVM_XEN_HVM_EVTCHN_SEND(int fd, ulong req, in KvmIrqRoutingXenEvtChn msg);
+	internal static void KVM_XEN_HVM_EVTCHN_SEND(int fd, in KvmIrqRoutingXenEvtChn msg) => Trap(ioctl_KVM_XEN_HVM_EVTCHN_SEND(fd, _KVM_XEN_HVM_EVTCHN_SEND, msg));
 	
 	internal static void SetCpuid(int fd) {
 		fixed(uint* buf = new uint[2 + 10 * 100]) {

@@ -46,9 +46,14 @@ struct KvmXenHvmAttr {
 	[FieldOffset(8)] public ulong SharedInfoGfn;
 }
 
+[StructLayout(LayoutKind.Sequential)]
+struct KvmIrqRoutingXenEvtChn {
+	public uint Port, Vcpu, Priority;
+}
+
 public unsafe class KvmVm : IDisposable {
 	public ISystem System;
-	readonly WrappedFD VmFd;
+	internal readonly WrappedFD VmFd;
 	readonly Dictionary<ulong, uint> MemorySlots = new();
 	readonly Stack<uint> FreeSlots = new();
 	readonly List<KvmVcpu> Vcpus = new();
@@ -60,7 +65,7 @@ public unsafe class KvmVm : IDisposable {
 		VmFd = new(Ioctl.KVM_CREATE_VM());
 		
 		Ioctl.KVM_XEN_HVM_CONFIG(VmFd, new() {
-			Flags = 1 << 1, // KVM_XEN_HVM_CONFIG_INTERCEPT_HCALL
+			Flags = (1 << 1), // KVM_XEN_HVM_CONFIG_INTERCEPT_HCALL
 			Msr = 0xDEADBEEF, 
 		});
 	}
@@ -114,7 +119,7 @@ public unsafe class KvmVm : IDisposable {
 	public KvmVcpu CreateVcpu() {
 		var fd = Ioctl.KVM_CREATE_VCPU(VmFd, (ulong) Vcpus.Count);
 		if(fd == -1) return null;
-		var vcpu = new KvmVcpu(this, fd);
+		var vcpu = new KvmVcpu(this, fd, Vcpus.Count);
 		Vcpus.Add(vcpu);
 		return vcpu;
 	}

@@ -134,6 +134,7 @@ public unsafe class KvmVcpu {
 	public readonly KvmVm Vm;
 	
 	readonly WrappedFD Fd;
+	readonly int Id;
 	volatile KvmCpuRun* CpuRun;
 	KvmRegs Regs;
 	bool DirtyRegs;
@@ -175,9 +176,10 @@ public unsafe class KvmVcpu {
 		set => Ioctl.KVM_XEN_VCPU_SET_ATTR(Fd, new() { Type = KvmXenVcpuAttrType.VcpuInfo, Value = value });
 	}
 	
-	internal KvmVcpu(KvmVm vm, int fd) {
+	internal KvmVcpu(KvmVm vm, int fd, int id) {
 		Vm = vm;
 		Fd = new(fd);
+		Id = id;
 		var mmapSize = Ioctl.KVM_GET_VCPU_MMAP_SIZE();
 		var ptr = Mmap(null, (ulong) mmapSize, 4 | 2, 1, fd, 0);
 		if(ptr == null) throw new Exception("Failed to mmap kvm_run!");
@@ -234,6 +236,8 @@ public unsafe class KvmVcpu {
 					Vm.System.PortIo(this, ie.Port, ie.Direction != 0, new Span<byte>((byte*) CpuRun + (int) ie.DataOffset, ie.Size));
 					break;
 				}
+				case KvmExitReason.Hlt:
+					break;
 				default:
 					var (valid, _, paddr) = Translate(Rip);
 					Console.WriteLine($"Exited at 0x{Rip:X} (physaddr 0x{paddr:X} - valid {valid})");
@@ -241,6 +245,13 @@ public unsafe class KvmVcpu {
 			}
 		}
 	}
+
+	public void TriggerEventChannel(uint port, uint priority) => 
+		Ioctl.KVM_XEN_HVM_EVTCHN_SEND(Vm.VmFd, new() {
+			Port = port,
+			Vcpu = (uint) Id,
+			Priority = priority
+		});
 	
 	[DllImport("libc", EntryPoint = "mmap")]
 	static extern void* Mmap(void* addr, ulong length, int prot, int flags, int fd, ulong offset);
