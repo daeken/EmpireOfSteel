@@ -127,12 +127,64 @@ public static unsafe class Ioctl {
 	[DllImport("libc", CallingConvention = CallingConvention.Cdecl, EntryPoint = "ioctl", SetLastError = true)]
 	static extern int ioctl_KVM_XEN_HVM_EVTCHN_SEND(int fd, ulong req, in KvmIrqRoutingXenEvtChn msg);
 	internal static void KVM_XEN_HVM_EVTCHN_SEND(int fd, in KvmIrqRoutingXenEvtChn msg) => Trap(ioctl_KVM_XEN_HVM_EVTCHN_SEND(fd, _KVM_XEN_HVM_EVTCHN_SEND, msg));
+
+	[StructLayout(LayoutKind.Sequential)]
+	internal struct KvmCpuidEntry2 {
+		public uint Function, Index, Flags, Eax, Ebx, Ecx, Edx;
+		uint Pad0, Pad1, Pad2;
+	}
 	
-	internal static void SetCpuid(int fd) {
+	internal static void SetCpuid(int fd, int vcpuId) {
 		fixed(uint* buf = new uint[2 + 10 * 100]) {
 			buf[0] = 100;
 			Trap(ioctl_KVM_GET_SUPPORTED_CPUID(KvmFd, _KVM_GET_SUPPORTED_CPUID, buf));
 			Trap(ioctl_KVM_GET_SUPPORTED_CPUID(KvmFd, _KVM_GET_SUPPORTED_CPUID, buf));
+			var entries = (KvmCpuidEntry2*) &buf[2];
+			var temp = buf;
+			void AddOrReplace(KvmCpuidEntry2 entry) {
+				for(var i = 0; i < temp[0]; ++i) {
+					if(entries[i].Function == entry.Function) {
+						entries[i] = entry;
+						return;
+					}
+				}
+				entries[temp[0]++] = entry;
+			}
+			AddOrReplace(new() {
+				Function = 0x40000000,
+				Eax = 0x40000004,
+				Ebx = 0x566e6558, 
+				Ecx = 0x65584d4d,
+				Edx = 0x4d4d566e
+			});
+			AddOrReplace(new() {
+				Function = 0x40000001,
+				Eax = (13 << 16) | 37,
+				Ebx = 0, 
+				Ecx = 0,
+				Edx = 0
+			});
+			AddOrReplace(new() {
+				Function = 0x40000002,
+				Eax = 1,
+				Ebx = 0, 
+				Ecx = 0,
+				Edx = 0
+			});
+			AddOrReplace(new() {
+				Function = 0x40000003,
+				Eax = 0,
+				Ebx = 0, 
+				Ecx = 0,
+				Edx = 0
+			});
+			AddOrReplace(new() {
+				Function = 0x40000004,
+				Eax = 1 << 3, // XEN_HVM_CPUID_VCPU_ID_PRESENT
+				Ebx = (uint) vcpuId, 
+				Ecx = 0,
+				Edx = 0
+			});
 			Trap(ioctl_KVM_SET_CPUID2(fd, _KVM_SET_CPUID2, buf));
 		}
 	}

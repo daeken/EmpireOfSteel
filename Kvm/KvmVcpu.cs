@@ -136,6 +136,9 @@ public unsafe class KvmVcpu {
 	readonly WrappedFD Fd;
 	readonly int Id;
 	volatile KvmCpuRun* CpuRun;
+
+	bool TimerTriggered;
+	
 	KvmRegs Regs;
 	bool DirtyRegs;
 	void MakeDirty<T>(T _) => DirtyRegs = true;
@@ -185,7 +188,8 @@ public unsafe class KvmVcpu {
 		if(ptr == null) throw new Exception("Failed to mmap kvm_run!");
 		CpuRun = (KvmCpuRun*) ptr;
 		Ioctl.KVM_GET_REGS(fd, out Regs);
-		Ioctl.SetCpuid(fd);
+		Ioctl.SetCpuid(fd, id);
+		TriggerEventChannel(0, 0);
 	}
 
 	internal void Dispose() {

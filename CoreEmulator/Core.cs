@@ -147,7 +147,7 @@ public unsafe class Core : ISystem {
 		var temp = PhysMem.AsSpan<byte>(Vcpu.SafeTranslate(0xffffffff8072b5d4));
 		for(var i = 0; i < 5; ++i)
 			temp[i] = 0x90;
-		//PhysMem.AsSpan<byte>(Vcpu.SafeTranslate(0xffffffff81080010))[0] = 0xF4;
+		//PhysMem.AsSpan<byte>(Vcpu.SafeTranslate(0xffffffff8072bbb0))[0] = 0xF4;
 		//PhysMem.AsSpan<byte>(Vcpu.SafeTranslate(0xffffffff80c1b950))[0] = 0xF4; // panic hook
 
 		Console.CancelKeyPress += (sender, eventArgs) => eventArgs.Cancel = true;
@@ -163,7 +163,7 @@ public unsafe class Core : ISystem {
 			Console.WriteLine($"RCX 0x{Vcpu.Rcx:X}    RDX 0x{Vcpu.Rdx:X}");
 			Console.WriteLine($"RBP 0x{Vcpu.Rbp:X}    RSP 0x{Vcpu.Rsp:X}");
 			Console.WriteLine($"RDI 0x{Vcpu.Rax:X}    RSI 0x{Vcpu.Rsi:X}");
-			Console.WriteLine($"R8  0x{Vcpu.R8:X}    R9  0x{Vcpu.R9:X}");
+			Console.WriteLine($"R8  0x{Vcpu.R8 :X}    R9  0x{Vcpu.R9 :X}");
 			Console.WriteLine($"R10 0x{Vcpu.R10:X}    R11 0x{Vcpu.R11:X}");
 			Console.WriteLine($"R12 0x{Vcpu.R12:X}    R13 0x{Vcpu.R13:X}");
 			Console.WriteLine($"R14 0x{Vcpu.R14:X}    R15 0x{Vcpu.R15:X}");
@@ -178,6 +178,18 @@ public unsafe class Core : ISystem {
 	
 	public ulong Hypercall(KvmVcpu cpu, ulong num, ulong[] args) {
 		switch((XenHypercall) num) {
+			case XenHypercall.XenVersion: {
+				// Only XENVER_get_features is used by FreeBSD
+				if(args[0] != 6) throw new Exception($"Unhandled XenVersion op: {args[0]}");
+				var buf = PhysMem.AsSpan<uint>(cpu.SafeTranslate(args[1]));
+				if(buf[0] == 0)
+					// FreeBSD asks for: writable_descriptor_tables|auto_translated_physmap|supervisor_mode_kernel|hvm_callback_vector
+					// We also give XENFEAT_hvm_safe_pvclock
+					buf[1] = (1U << 1) | (1U << 2) | (1U << 3) | (1U << 8) | (1 << 9) | (1U << 10);
+				else
+					buf[1] = 0;
+				break;
+			}
 			case XenHypercall.ConsoleIo: {
 				if(args[0] == 0) { // Write!
 					var (size, addr) = (args[1], args[2]);
@@ -220,7 +232,7 @@ public unsafe class Core : ISystem {
 			}
 			case XenHypercall.VcpuOp: {
 				var cpunum = args[1];
-				Console.WriteLine($"Vcpu op for cpunum 0x{cpunum:X} (GS 0x{cpu.Sregs.Gs.Base:X} -- vcpu_id? 0x{PhysMem.AsSpan<uint>(cpu.SafeTranslate(cpu.Sregs.Gs.Base + 0x30c))[0]:X})");
+				//Console.WriteLine($"Vcpu op for cpunum 0x{cpunum:X} (GS 0x{cpu.Sregs.Gs.Base:X} -- vcpu_id? 0x{PhysMem.AsSpan<uint>(cpu.SafeTranslate(cpu.Sregs.Gs.Base + 0x30c))[0]:X})");
 				switch((XenVcpuOp) args[0]) {
 					case XenVcpuOp.IsUp:
 						return cpunum == 0 ? 1 : ~0UL;
@@ -232,7 +244,9 @@ public unsafe class Core : ISystem {
 						break;
 					}
 					case XenVcpuOp.SetSingleshotTimer:
-						Console.WriteLine($"Ignoring SetSingleshotTimer for vcpu {cpunum}");
+						Console.WriteLine("Setting singleshot timer?");
+						var abstime = PhysMem.AsRef<ulong>(cpu.SafeTranslate(args[2]));
+						Timer.AddAbsoluteTimeout(abstime / 1000000, cpu); // Nanoseconds to milliseconds; precision loss ahoy
 						break;
 					case {} x:
 						throw new Exception($"Unhandled VCPU op from xen interface: {x}");
@@ -262,6 +276,16 @@ public unsafe class Core : ISystem {
 					}
 					default:
 						Console.WriteLine($"Unhandled event channel op: {args[0]}");
+						break;
+				}
+				break;
+			}
+			case XenHypercall.HvmOp: {
+				switch(args[0]) {
+					case 0: case 23: // HVMOP_set_param / HVMOP_set_evtchn_upcall_vector
+						return 0;
+					default:
+						Console.WriteLine($"Unhandled HVM op from xen interface: {args[0]}");
 						break;
 				}
 				break;

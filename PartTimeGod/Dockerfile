@@ -19,4 +19,5 @@ COPY . .
 RUN cp /PARTTIMEGOD /freebsd-src/sys/amd64/conf/
 
 WORKDIR /freebsd-src
+RUN git apply /patches.diff --ignore-space-change --ignore-whitespace
 RUN MAKEOBJDIRPREFIX=/build XCC=/usr/bin/clang XCXX=/usr/bin/clang++ XCPP=/usr/bin/clang-cpp XLD=/usr/bin/ld.lld ./tools/build/make.py TARGET=amd64 TARGET_ARCH=amd64 KERNCONF=PARTTIMEGOD NO_MODULES=yes buildkernel -j`nproc`

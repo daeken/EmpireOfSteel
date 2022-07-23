@@ -38,6 +38,11 @@ enum KvmXenHvmAttrType : ushort {
 	UpcallVector,
 }
 
+[StructLayout(LayoutKind.Explicit)]
+struct KvmXenHvmEvtchn {
+	
+}
+
 [StructLayout(LayoutKind.Explicit, Size = 72)]
 struct KvmXenHvmAttr {
 	[FieldOffset(0)] public KvmXenHvmAttrType Type;
@@ -46,7 +51,7 @@ struct KvmXenHvmAttr {
 	[FieldOffset(8)] public ulong SharedInfoGfn;
 }
 
-[StructLayout(LayoutKind.Sequential)]
+[StructLayout(LayoutKind.Sequential, Size = 16)]
 struct KvmIrqRoutingXenEvtChn {
 	public uint Port, Vcpu, Priority;
 }
@@ -65,7 +70,7 @@ public unsafe class KvmVm : IDisposable {
 		VmFd = new(Ioctl.KVM_CREATE_VM());
 		
 		Ioctl.KVM_XEN_HVM_CONFIG(VmFd, new() {
-			Flags = (1 << 1), // KVM_XEN_HVM_CONFIG_INTERCEPT_HCALL
+			Flags = (1 << 1) | (1 << 5), // KVM_XEN_HVM_CONFIG_INTERCEPT_HCALL | KVM_XEN_HVM_CONFIG_EVTCHN_SEND
 			Msr = 0xDEADBEEF, 
 		});
 	}
